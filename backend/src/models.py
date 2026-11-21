@@ -1,6 +1,6 @@
 from sqlalchemy import Column,Integer,String,ForeignKey,JSON,UniqueConstraint,CheckConstraint
 from .db import Base
-from .constants import COPY_CONDITIONS,PACK_STATES,ASSIGNMENT_STATES
+from .constants import COPY_CONDITIONS,PACK_STATES,ASSIGNMENT_STATES,RECOMMENDATION_STATES,BASKET_STATES
 class User(Base):
     __tablename__='users'
     id=Column(Integer,primary_key=True);email=Column(String(100),unique=True,nullable=False);password_hash=Column(String(220),nullable=False);role=Column(String(30),nullable=False)
@@ -29,7 +29,7 @@ class Inspection(Base):
     id=Column(Integer,primary_key=True);copy_id=Column(Integer,ForeignKey('copies.id'),nullable=False);condition=Column(String(20),nullable=False);note=Column(String(250),nullable=False)
 class Pack(Base):
     __tablename__='packs'
-    id=Column(Integer,primary_key=True);code=Column(String(60),unique=True,nullable=False);classroom_id=Column(Integer,ForeignKey('classrooms.id'),nullable=False);term=Column(String(30),nullable=False);state=Column(String(20),default=PACK_STATES[0]);ml_state=Column(String(20),default='recorded');recommendation=Column(JSON);error=Column(String(450))
+    id=Column(Integer,primary_key=True);code=Column(String(60),unique=True,nullable=False);classroom_id=Column(Integer,ForeignKey('classrooms.id'),nullable=False);term=Column(String(30),nullable=False);state=Column(String(20),default=PACK_STATES[0]);ml_state=Column(String(20),default='recorded');recommendation=Column(JSON);recommendation_status=Column(String(20),default=RECOMMENDATION_STATES[0]);review_note=Column(String(450),default='');error=Column(String(450))
 class PackLine(Base):
     __tablename__='pack_lines'
     id=Column(Integer,primary_key=True);pack_id=Column(Integer,ForeignKey('packs.id'),nullable=False);edition_id=Column(Integer,ForeignKey('editions.id'),nullable=False);quantity=Column(Integer,nullable=False)
@@ -49,4 +49,7 @@ class DepositEntry(Base):
     id=Column(Integer,primary_key=True);account_id=Column(Integer,ForeignKey('accounts.id'),nullable=False);assignment_id=Column(Integer,ForeignKey('assignments.id'));kind=Column(String(20),nullable=False);amount_cents=Column(Integer,nullable=False);receipt=Column(String(80),unique=True,nullable=False);note=Column(String(250),nullable=False)
 class HistoricalBasket(Base):
     __tablename__='historical_baskets'
-    id=Column(Integer,primary_key=True);code=Column(String(40),unique=True,nullable=False);subjects=Column(JSON,nullable=False)
+    id=Column(Integer,primary_key=True);code=Column(String(40),unique=True,nullable=False);subjects=Column(JSON,nullable=False);state=Column(String(20),default=BASKET_STATES[0]);withdrawal_id=Column(Integer)
+class BasketWithdrawal(Base):
+    __tablename__='basket_withdrawals'
+    id=Column(Integer,primary_key=True);basket_id=Column(Integer,ForeignKey('historical_baskets.id'),unique=True,nullable=False);reason=Column(String(250),nullable=False);actor=Column(String(100),nullable=False);affected_pack_ids=Column(JSON,nullable=False);created_at=Column(String(30),nullable=False)

@@ -11,7 +11,7 @@ from .schemas import *
 from .common import lock,inventory_lock,pack,add,audit
 from .auth import current,writer,supervisor,verify,token
 from .middleware import Trace,Burst
-from . import pack_service as packs,circulation_service as circulation
+from . import pack_service as packs,circulation_service as circulation,basket_service as baskets
 q=redis.Redis.from_url(os.environ['REDIS_URL'],decode_responses=True)
 @asynccontextmanager
 async def lifespan(app):
@@ -35,7 +35,7 @@ def login(d:Login,s=Depends(session)):
 def me(u=Depends(current)):return {'email':u.email,'role':u.role}
 @app.get('/archive')
 def archive(s=Depends(session),u=Depends(current)):
-    return {m.__tablename__:[pack(x)for x in s.scalars(select(m).order_by(m.id))]for m in (Edition,Compatibility,Classroom,Student,Copy,Inspection,Pack,PackLine,Assignment,Purchase,Account,DepositEntry)}
+    return {m.__tablename__:[pack(x)for x in s.scalars(select(m).order_by(m.id))]for m in (Edition,Compatibility,Classroom,Student,Copy,Inspection,Pack,PackLine,Assignment,Purchase,Account,DepositEntry,HistoricalBasket,BasketWithdrawal)}
 @app.get('/audits')
 def audits(s=Depends(session),u=Depends(current)):return [pack(x)for x in s.scalars(select(Audit).order_by(Audit.id.desc()).limit(50))]
 @app.post('/editions')
@@ -75,11 +75,18 @@ def pack_new(d:PackInput,s=Depends(session),u=Depends(writer)):
 @app.post('/packs/{id}/recommend')
 def recommend(id:int,s=Depends(session),u=Depends(writer)):
     p=lock(s,Pack,id)
-    if p.ml_state not in ('recorded','failed'):raise HTTPException(409,'只可估计新配套或失败重试')
+    if p.ml_state not in ('recorded','failed','stale'):raise HTTPException(409,'只可估计新配套、失败重试或撤回失效后重算')
     p.ml_state='queued';p.error=None;s.commit()
     try:q.rpush('book-baskets',id)
     except Exception:p.ml_state='failed';p.error='队列不可用，恢复后可重新排队';s.commit();raise HTTPException(503,p.error)
     return pack(p)
+@app.get('/historical-baskets')
+def historical_baskets(s=Depends(session),u=Depends(current)):
+    rows=s.execute(select(HistoricalBasket,BasketWithdrawal).join(BasketWithdrawal,BasketWithdrawal.basket_id==HistoricalBasket.id,isouter=True).order_by(HistoricalBasket.id)).all()
+    return [pack(b)|({'withdrawal':pack(w)}if w else{'withdrawal':None})for b,w in rows]
+@app.post('/historical-baskets/{id}/withdraw')
+def withdraw_basket(id:int,d:BasketWithdrawalInput,s=Depends(session),u=Depends(supervisor)):
+    x=baskets.withdraw(s,id,d,u);s.commit();return x
 @app.post('/packs/{id}/reserve')
 def reserve(id:int,s=Depends(session),u=Depends(supervisor)):
     x=packs.reserve(s,id,u);s.commit();return x

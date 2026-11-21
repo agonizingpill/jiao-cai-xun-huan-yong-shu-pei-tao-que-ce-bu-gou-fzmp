@@ -38,7 +38,19 @@ JWT8小时，PBKDF2盐化口令；Trace请求ID、Burst每IP每分钟360请求�
 
 `backend/src/basket_rules.py`实现Apriori频繁项剪枝（最多三项），支持度≥0.15、置信度≥0.6、lift>1。96组固定seed38模拟课程篮，包含数学/物理/实验、语文/历史、数学/信息、美术/音乐等配套。先固定拆72训练/24留出，只用训练篮挖规则。留出每篮隐藏一科，剩余科为输入；命中隐藏科计召回，另记建议覆盖率与逐篮结果。这个口径是“每篮一个隐藏科的召回”，不是对真实学生需求的准确率承诺。
 
-worker从Redis取Pack ID，查询当前课程subject及历史篮，计算真实规则，DB recommendation与共享卷`/artifacts/basket-ID.json`持久化；保存训练/留出索引、source_checksum、阈值、规则support/confidence/lift、当前建议和留出病例。失败保存failed/error，队列恢复同Pack可重试。未实现worker硬崩溃后的running自动回收。
+worker从Redis取Pack ID，查询当前课程subject及在档历史篮，计算真实规则，DB recommendation与共享卷`/artifacts/basket-ID.json`持久化；保存训练/留出的稳定篮ID、source_checksum、阈值、规则support/confidence/lift、当前建议和留出病例。失败保存failed/error，队列恢复同Pack可重试。未实现worker硬崩溃后的running自动回收。
+
+## 历史课程篮撤回
+
+历史课程篮可由主管在「班级配套」页逐篮撤回（`POST /historical-baskets/{id}/withdraw`，仅supervisor），登记写入`basket_withdrawals`并把该篮置为`withdrawn`，规则与口径如下：
+
+1. **训练/留出剔除**：Apriori只读取`state='active'`的在档篮；撤回后任何新分析都不再使用该篮。在档篮不足73份时拒绝分析，保持固定72训练/留出口径，不产生残缺结果。
+2. **历次分析清理与分级**：撤回事务内对全部已有分析按篮血缘判定——用过该篮（出现在`basket_ids`/训练或留出索引/逐篮明细）的分析`recommendation_status='invalid'`、任务态`stale`，并删除其中该篮的逐篮留出明细，其余篮的明细照查；没用到的分析保持`active`。升级前没有篮血缘字段的旧分析无法确认，标`recommendation_status='review'`待人工核验，不直接作废。
+3. **班级配套页面留档**：失效分析保留当时发出的科目、份数与留出召回/覆盖率分数，只把建议标为已失效、提示不再据此发书或采购；待核分析加待核标识。可对`stale`配套重新发起分析，用在档篮重算。
+4. **并发防护**：worker先锁Pack置running，计算只取在档篮并记录本次篮ID快照，写回前在同一Pack行锁内复查快照中是否有篮被撤回；若撤回与分析并发，晚到结果整体丢弃、回到队列重算，既不会把撤回篮的逐篮明细写回来，也不会发出受它影响的新建议。撤回事务先锁篮行（与worker加锁顺序一致避免死锁），登记撤回后再处理各Pack。
+5. **撤回幂等**：对已撤回的篮重复请求不重复登记，直接返回原撤回记录（`idempotent=true`）；撤回登记与篮一一唯一。
+
+新增列通过`seed_service._migrate`在启动/seed时幂等ALTER补齐，旧库无需手工迁移；无篮血缘的旧分析在迁移时统一标待核。
 
 ## 一天的业务剧本
 
@@ -57,4 +69,4 @@ worker从Redis取Pack ID，查询当前课程subject及历史篮，计算真实�
 
 本地后端安装requirements并设置DATABASE_URL/REDIS_URL/JWT_SECRET，`uvicorn src.main:app --reload`与`python -m src.worker`；前端保留Compose Nginx /api代理。seed自然键只补缺，不覆盖人工检查、条码状态、兼容核定、配套、已付押金/损耗/退款；历史训练篮固定96条。测试、日志与截图在`../../test-artifacts/gb-1038/`，不混入生产源码。
 
-局限：不接校园一卡通/支付/采购供应商；班级人数是课程份数上限，不建选课排课；押金按要求课程版次计，不按旧书折旧计；退书后不自动转配，库管需发起新配套；补购只记数量到货，不计采购款；未实现整配套取消释放、兼容映射撤销、学期账户重开或硬崩溃任务回收；课程篮为模拟数据。
+局限：不接校园一卡通/支付/采购供应商；班级人数是课程份数上限，不建选课排课；押金按要求课程版次计，不按旧书折旧计；退书后不自动转配，库管需发起新配套；补购只记数量到货，不计采购款；未实现整配套取消释放、兼容映射撤销、学期账户重开或硬崩溃任务回收；撤回只做软删除与在档过滤，不物理删除历史篮；课程篮为模拟数据。

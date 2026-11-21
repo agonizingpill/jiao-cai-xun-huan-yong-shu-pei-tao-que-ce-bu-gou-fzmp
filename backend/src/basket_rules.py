@@ -1,6 +1,7 @@
 import hashlib,json,itertools
 import numpy as np
 
+TRAIN_SIZE=72
 def apriori(baskets,min_support=.15,min_confidence=.6):
     n=len(baskets);items=sorted(set().union(*baskets));counts={};previous=set()
     for k in range(1,4):
@@ -20,7 +21,9 @@ def apriori(baskets,min_support=.15,min_confidence=.6):
             if confidence>=min_confidence and lift>1:rules.append({'if_subjects':sorted(lhs),'then_subject':rhs,'support':round(count/n,4),'confidence':round(confidence,4),'lift':round(lift,4)})
     return sorted(rules,key=lambda r:(-r['lift'],-r['confidence'],r['then_subject']))
 def recommend(baskets,subjects):
-    source=[set(x)for x in baskets];rng=np.random.default_rng(38);indices=rng.permutation(len(source));tr=indices[:72];te=indices[72:];rules=apriori([source[i]for i in tr]);hit=0;covered=0;cases=[]
+    source=[set(x)for x in baskets]
+    if len(source)<=TRAIN_SIZE:raise ValueError('在档历史篮不足 %d 份，无法保持固定 %d 训练/留出口径，请补足语料后再分析'%(TRAIN_SIZE+1,TRAIN_SIZE))
+    rng=np.random.default_rng(38);indices=rng.permutation(len(source));tr=indices[:TRAIN_SIZE];te=indices[TRAIN_SIZE:];rules=apriori([source[i]for i in tr]);hit=0;covered=0;cases=[]
     for i in te:
         basket=sorted(source[i]);hidden=basket[int(rng.integers(0,len(basket)))];visible=set(basket)-{hidden};guesses={r['then_subject']for r in rules if set(r['if_subjects'])<=visible and r['then_subject']not in visible};hit+=hidden in guesses;covered+=bool(guesses);cases.append({'basket_index':int(i),'visible':sorted(visible),'hidden':hidden,'recommended':sorted(guesses),'hit':hidden in guesses})
     current=set(subjects);suggested=[r for r in rules if set(r['if_subjects'])<=current and r['then_subject']not in current]

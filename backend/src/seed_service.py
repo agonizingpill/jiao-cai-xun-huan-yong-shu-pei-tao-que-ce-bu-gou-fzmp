@@ -1,11 +1,29 @@
-from sqlalchemy import select,func
+from sqlalchemy import select,func,text
 import numpy as np
 from .db import Base,engine,Session
 from .models import *
 from .auth import hashed
 
+def _migrate(engine):
+    """幂等补齐撤回功能新增列；新库由 create_all 直接建出，旧库用 ALTER 增补。"""
+    with engine.begin() as conn:
+        cols={r[0]for r in conn.execute(text('SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=:t'),{'t':'packs'})}if engine.dialect.name=='mysql' else {r[1]for r in conn.execute(text("PRAGMA table_info(packs)"))}
+        if 'recommendation_status' not in cols:conn.execute(text("ALTER TABLE packs ADD COLUMN recommendation_status VARCHAR(20) DEFAULT 'active'"))
+        if 'review_note' not in cols:conn.execute(text("ALTER TABLE packs ADD COLUMN review_note VARCHAR(450) DEFAULT ''"))
+        bcols={r[0]for r in conn.execute(text('SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=:t'),{'t':'historical_baskets'})}if engine.dialect.name=='mysql' else {r[1]for r in conn.execute(text("PRAGMA table_info(historical_baskets)"))}
+        if 'state' not in bcols:conn.execute(text("ALTER TABLE historical_baskets ADD COLUMN state VARCHAR(20) DEFAULT 'active'"))
+        if 'withdrawal_id' not in bcols:conn.execute(text('ALTER TABLE historical_baskets ADD COLUMN withdrawal_id INTEGER'))
+        # 升级前的旧分析没有篮血缘字段，无法判断用过哪份篮，统一标待核
+        import json as _json
+        for pid,raw in conn.execute(text('SELECT id,recommendation FROM packs WHERE recommendation IS NOT NULL')).all():
+            try:rec=_json.loads(raw) if isinstance(raw,str) else raw
+            except Exception:rec=None
+            if isinstance(rec,dict) and rec.get('basket_ids')is None and not (rec.get('train_indices')or rec.get('holdout_indices')):
+                conn.execute(text("UPDATE packs SET recommendation_status='review',review_note=:n WHERE id=:id AND recommendation_status='active'"),{'n':'旧分析缺少篮血缘，无法确认是否使用过撤回篮，待人工核验','id':pid})
+
 def seed():
     Base.metadata.create_all(engine)
+    _migrate(engine)
     with Session()as s:
         for role in ('operator','supervisor','viewer'):
             if not s.scalar(select(User.id).where(User.email==role+'@xunshu.demo')):s.add(User(email=role+'@xunshu.demo',password_hash=hashed('Books2026!'),role=role))
